@@ -1,0 +1,146 @@
+import networkx as nx
+import matplotlib.pyplot as plt
+import pandas as pd
+import numpy as np
+
+
+data2 = pd.read_csv('task2-Copy1 — копия — копия.csv', delimiter='\t')
+data2 = pd.read_csv('task2.csv', delimiter='\t')
+data = pd.read_csv('info_for_task2-Copy1.csv', delimiter=';')
+display(data)
+display(data2)
+data["inn"] = data["inn"].map(str)
+data["main_okved_code"] = data["main_okved_code"].map(str)
+data["main_okved_code"] = data["main_okved_code"].map(lambda x: x.split(".")[0])
+temp = data2['u_hash'].str.split(':',expand=True)
+data2['request_type'] = temp[0]
+data2["u_hash"] = temp[1]
+
+data2 = data2.groupby(["u_hash"]).agg(list).reset_index()
+data2["request_type"] = data2['request_type'].map(lambda x: x[0])
+
+def v_hash_maper(stroka):
+    dictionary = {}
+    for i in range(len(stroka)):
+        dictionary[stroka[i].split(":")[0]] = stroka[i].split(":")[1]
+    return dictionary
+        
+    
+data2["v_hash"] = data2["v_hash"].map(v_hash_maper)
+data2 = pd.concat([data2.drop(['v_hash'], axis=1), data2['v_hash'].apply(pd.Series)], axis=1)
+list_of_headers = list(data2.columns)
+list_of_headers.remove("u_hash")
+list_of_headers.remove("request_type")
+data2 = data.merge(data2, on='inn', how='outer')
+display(data2)
+
+# достаем точки из df pandas
+main_name = "legal_name"
+data2 = data2[data2[main_name].notna()]
+column_data = data2[data2["inn"].notna()]
+
+ALL_POINTS = nx.Graph()
+for i in list_of_headers:
+    column_data = data2[data2[i].notna()]
+    G = nx.from_pandas_edgelist(column_data, main_name , i)
+    ALL_POINTS = nx.compose(ALL_POINTS, G)
+    
+for i in list_of_headers:
+    for j in list_of_headers:
+        if i == j:
+            continue
+        else:
+            column_data = data2[data2[j].notna()]
+            column_data = column_data[column_data[j].notna()]
+            column_data = column_data[column_data[i].notna()]
+            
+            G = nx.from_pandas_edgelist(column_data, i , j)
+            ALL_POINTS = nx.compose(ALL_POINTS, G)
+
+
+G = ALL_POINTS
+color_map = []
+size_map = []
+font_map = []
+
+for i in G.nodes():
+    if i in data2["legal_name"].values and i.startswith("ОБЩЕСТВО С ОГРАНИЧЕННОЙ ОТВЕТСТВЕННОСТЬЮ"):
+        color_map.append("red")
+        size_map.append(3000)
+        font_map.append(15)
+    else:
+        color_map.append("black")
+        size_map.append(800)
+        font_map.append(2)
+        
+X = 60
+plt.figure(figsize=(X, X))
+
+
+nx.draw(G, with_labels=True, node_size=size_map, alpha=0.7, node_shape="8",width=5, node_color=color_map, edge_color="magenta")
+plt.show()
+
+central_firma_list = sorted(list(nx.algorithms.community.label_propagation.asyn_lpa_communities(G)), key=len, reverse=True)
+list_of_busines = {}
+for i in central_firma_list:
+    # название (okved_name) отрасли + число inn связанных с ним
+    sorted_busines = (sorted(i, reverse=True))
+    display(sorted_busines[0], len(sorted_busines[1:]))
+    if sorted_busines[0].startswith("ОБЩЕСТВО С ОГРАНИЧЕННОЙ ОТВЕТСТВЕННОСТЬЮ"):
+        list_of_busines[sorted_busines[0]] = sorted_busines[1:]
+
+display(len(list_of_busines))
+  
+
+counter_of_otrasl = {}
+for i in list_of_busines.keys():
+    if list(data[data["legal_name"] == i].head(1)["main_okved_name"])[0] not in counter_of_otrasl.keys():
+        counter_of_otrasl[list(data[data["legal_name"] == i].head(1)["main_okved_name"])[0]] = 1
+    else:
+        counter_of_otrasl[list(data[data["legal_name"] == i].head(1)["main_okved_name"])[0]] += 1
+        
+
+inter_list = list(map(lambda x: x[0], sorted(counter_of_otrasl.items(), key=lambda x: x[1], reverse=True)[:10]))
+display("Самые перспективные отрасли:", inter_list)
+    
+
+
+new_data = pd.DataFrame()
+G2 = nx.Graph()
+
+grath_colors = ["red", "green", "blue", "yellow", "orange", "pink", "purple", "cyan", "teal", "lime"]
+color_map = []
+
+N = 0
+last_len_loints = 0
+for i in range(len(inter_list)):
+    new_data = pd.concat([new_data, data2[data2["main_okved_name"] == inter_list[i]]])
+    new_data = new_data[new_data["legal_name"].notna()]
+    new_points = nx.from_pandas_edgelist(new_data, "main_okved_name" , "legal_name")
+    for j in range(len(new_points) - last_len_loints):
+        color_map.append(grath_colors[i])
+    last_len_loints = len(new_points)
+    
+
+# Топ 10 отраслевых кодов по использованию в компаниях и компании их использующие
+G2 = new_points
+nodes2 = list(G2.nodes())
+subgraph = G2.subgraph(nodes2)
+new_sub = G2.to_directed()
+
+colors = plt.figure(figsize=(20, 20))
+X = 60
+plt.figure(figsize=(X, X))
+
+import math
+pos=nx.spring_layout(G2, k=10/math.sqrt(G.order()), scale=10)
+
+df = pd.DataFrame(index=G2.nodes(), columns=G2.nodes())
+for row, data in nx.shortest_path_length(G2):
+    for col, dist in data.items():
+        df.loc[row,col] = dist
+
+df = df.fillna(df.max().max())
+clo_center = nx.closeness_centrality(G2)
+layout = nx.kamada_kawai_layout(G2, dist=df.to_dict(), weight=clo_center, scale=1000.0)
+nx.draw(G2, layout, with_labels=True, node_size=3000, font_size=12, alpha=0.9, node_shape="8", node_color=color_map)
